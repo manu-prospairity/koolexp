@@ -24,6 +24,17 @@ enum FragmentStatus {
   ARCHIVED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ApprovalEntityType {
+  PAGE
+  FRAGMENT
+}
+
 enum ReleaseStatus {
   QUEUED
   SUBMITTED
@@ -43,6 +54,8 @@ model Page {
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
   releases   ReleasePage[]
+  schedule   PageSchedule?
+  workflow   PageWorkflowEvent[]
 }
 
 model ContentFragment {
@@ -54,6 +67,7 @@ model ContentFragment {
   version    Int             @default(1)
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
+  workflow   FragmentWorkflowEvent[]
 }
 
 model Release {
@@ -86,4 +100,58 @@ model ReleasePage {
   page    Page    @relation(fields: [pageId], references: [id], onDelete: Restrict)
 
   @@unique([releaseId, sortOrder])
+}
+
+model PageSchedule {
+  id        String   @id @default(uuid())
+  pageId    String   @unique
+  startAt   DateTime?
+  endAt     DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+}
+
+model PageWorkflowEvent {
+  id        String   @id @default(uuid())
+  pageId    String
+  actor     String
+  action    String
+  notes     String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  page Page @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId, createdAt])
+}
+
+model FragmentWorkflowEvent {
+  id         String  @id @default(uuid())
+  fragmentId String
+  actor      String
+  action     String
+  notes      String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  fragment ContentFragment @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+
+  @@index([fragmentId, createdAt])
+}
+
+model ApprovalRequest {
+  id           String             @id @default(uuid())
+  entityType   ApprovalEntityType
+  entityId     String
+  status       ApprovalStatus     @default(PENDING)
+  requestedBy  String
+  decidedBy    String?
+  decidedAt    DateTime?
+  notes        String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([entityType, entityId])
 }

@@ -5,3 +5,5 @@ dist
 services/*/node_modules
 services/*/dist
 coverage
+data/*
+!data/.gitkeep

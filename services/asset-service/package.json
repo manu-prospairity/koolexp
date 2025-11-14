@@ -9,7 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "echo 'TODO: add tests'"
+    "test": "tsx --test src/server.test.ts"
   },
   "dependencies": {
     "@fastify/helmet": "^11.1.1",

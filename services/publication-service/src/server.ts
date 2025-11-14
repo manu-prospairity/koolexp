@@ -7,7 +7,7 @@ import { z } from 'zod';
 import crypto from 'crypto';
 
 import { ServiceConfig } from './config';
-import { FileReleaseStore, StoredReleaseStatus } from './storage/fileReleaseStore';
+import { JournalReleaseStore, StoredReleaseStatus } from './storage/journalReleaseStore';
 
 const ensureDir = (dir: string) => {
   fs.mkdirSync(dir, { recursive: true });
@@ -51,13 +51,13 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
   app.register(helmet);
   app.register(sensible);
 
-  const releasesDir = path.join(config.DATA_DIR, 'releases');
   const deliveryDir = path.join(config.DATA_DIR, 'delivery');
-  ensureDir(releasesDir);
+  const storeDir = path.join(config.DATA_DIR, 'release-store');
+  ensureDir(storeDir);
   ensureDir(deliveryDir);
   ensureDir(path.join(deliveryDir, 'releases'));
 
-  const releaseStore = new FileReleaseStore(releasesDir, deliveryDir);
+  const releaseStore = new JournalReleaseStore(path.join(storeDir, 'releases.json'), deliveryDir);
 
   app.addHook('onRequest', (request, reply, done) => {
     const requestId =
@@ -105,6 +105,18 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
   app.get('/v1/releases', async (request) => {
     const query = listReleaseQuerySchema.parse(request.query);
     return releaseStore.list({ status: query.status as StoredReleaseStatus | undefined, search: query.q });
+  });
+
+  app.get('/v1/releases/summary', async () => releaseStore.summary());
+
+  app.get('/v1/releases/active', async (request, reply) => {
+    const { releaseId } = request.query as { releaseId?: string };
+    const release = await releaseStore.getDeliverySnapshot(releaseId);
+    if (!release) {
+      reply.notFound('No promoted release found');
+      return;
+    }
+    return release;
   });
 
   app.get('/v1/releases/:id', async (request, reply) => {

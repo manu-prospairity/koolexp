@@ -9,6 +9,9 @@ import crypto from 'crypto';
 import { ServiceConfig } from './config';
 import prismaPlugin from './plugins/prisma';
 
+const pageStatuses = ['DRAFT', 'IN_REVIEW', 'APPROVED', 'PUBLISHED', 'ARCHIVED'] as const;
+const fragmentStatuses = ['DRAFT', 'IN_REVIEW', 'APPROVED', 'PUBLISHED', 'ARCHIVED'] as const;
+
 const componentSchema = z.object({
   componentKey: z.string(),
   region: z.string().optional(),
@@ -29,9 +32,7 @@ const createFragmentSchema = z.object({
   model: z.string().min(1),
   locale: z.string().min(2),
   fields: z.record(z.any()),
-  status: z
-    .enum(['DRAFT', 'IN_REVIEW', 'APPROVED', 'PUBLISHED', 'ARCHIVED'])
-    .default('DRAFT'),
+  status: z.enum(fragmentStatuses).default('DRAFT'),
   version: z.number().int().min(1).default(1)
 });
 
@@ -43,6 +44,64 @@ const releaseRequestSchema = z.object({
 
 const releaseListQuerySchema = z.object({
   status: z.enum(['QUEUED', 'SUBMITTED', 'FAILED']).optional(),
+  limit: z.coerce.number().min(1).max(50).default(20)
+});
+
+const fragmentListQuerySchema = z.object({
+  model: z.string().optional(),
+  locale: z.string().optional(),
+  status: z.enum(fragmentStatuses).optional(),
+  limit: z.coerce.number().min(1).max(50).default(20)
+});
+
+const updateFragmentSchema = z.object({
+  fields: z.record(z.any()).optional(),
+  status: z.enum(fragmentStatuses).optional(),
+  version: z.number().int().min(1).optional()
+});
+
+const scheduleSchema = z.object({
+  startAt: z.coerce.date().nullable().optional(),
+  endAt: z.coerce.date().nullable().optional()
+});
+
+const workflowEventSchema = z.object({
+  actor: z.string().min(1),
+  action: z.string().min(1),
+  notes: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+  status: z.enum(pageStatuses).optional()
+});
+
+const fragmentWorkflowEventSchema = z.object({
+  actor: z.string().min(1),
+  action: z.string().min(1),
+  notes: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+  status: z.enum(fragmentStatuses).optional()
+});
+
+const approvalEntitySchema = z.object({
+  entityType: z.enum(['PAGE', 'FRAGMENT']),
+  entityId: z.string().uuid(),
+  requestedBy: z.string().min(1),
+  notes: z.string().optional()
+});
+
+const approvalDecisionSchema = z.object({
+  decision: z.enum(['APPROVED', 'REJECTED']),
+  decidedBy: z.string().min(1),
+  notes: z.string().optional()
+});
+
+const approvalListQuerySchema = z.object({
+  entityType: z.enum(['PAGE', 'FRAGMENT']).optional(),
+  entityId: z.string().uuid().optional(),
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+  limit: z.coerce.number().min(1).max(50).default(20)
+});
+
+const workflowListQuerySchema = z.object({
   limit: z.coerce.number().min(1).max(50).default(20)
 });
 
@@ -169,11 +228,97 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
     return pages;
   });
 
+  app.get('/v1/pages/:id/schedule', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const schedule = await app.prisma.pageSchedule.findUnique({ where: { pageId: id } });
+    if (!schedule) {
+      reply.notFound('Schedule not found for page');
+      return;
+    }
+    return schedule;
+  });
+
+  app.put('/v1/pages/:id/schedule', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const payload = scheduleSchema.parse(request.body);
+
+    const page = await app.prisma.page.findUnique({ where: { id } });
+    if (!page) {
+      reply.notFound('Page not found');
+      return;
+    }
+
+    const schedule = await app.prisma.pageSchedule.upsert({
+      where: { pageId: id },
+      create: {
+        pageId: id,
+        startAt: payload.startAt ?? null,
+        endAt: payload.endAt ?? null
+      },
+      update: {
+        startAt: payload.startAt ?? null,
+        endAt: payload.endAt ?? null
+      }
+    });
+
+    reply.code(200).send(schedule);
+  });
+
+  app.get('/v1/pages/:id/workflow-events', async (request) => {
+    const { id } = request.params as { id: string };
+    const query = workflowListQuerySchema.parse(request.query);
+    return app.prisma.pageWorkflowEvent.findMany({
+      where: { pageId: id },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit
+    });
+  });
+
+  app.post('/v1/pages/:id/workflow-events', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const payload = workflowEventSchema.parse(request.body);
+
+    const page = await app.prisma.page.findUnique({ where: { id } });
+    if (!page) {
+      reply.notFound('Page not found');
+      return;
+    }
+
+    if (payload.status && payload.status !== page.status) {
+      await app.prisma.page.update({
+        where: { id },
+        data: { status: payload.status }
+      });
+    }
+
+    const event = await recordPageWorkflow(id, {
+      actor: payload.actor,
+      action: payload.action,
+      notes: payload.notes,
+      metadata: payload.metadata as Prisma.InputJsonValue | undefined
+    });
+
+    reply.code(201).send(event);
+  });
+
   app.post('/v1/fragments', async (request, reply) => {
     const payload = createFragmentSchema.parse(request.body);
     const fragment = await app.prisma.contentFragment.create({ data: payload });
     reply.code(201);
     return fragment;
+  });
+
+  app.get('/v1/fragments', async (request) => {
+    const query = fragmentListQuerySchema.parse(request.query);
+    return app.prisma.contentFragment.findMany({
+      where: {
+        ...(query.model ? { model: query.model } : {}),
+        ...(query.locale ? { locale: query.locale } : {}),
+        ...(query.status ? { status: query.status } : {})
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: query.limit
+    });
   });
 
   app.get('/v1/fragments/:id', async (request, reply) => {
@@ -186,17 +331,114 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
     return fragment;
   });
 
+  app.patch('/v1/fragments/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const payload = updateFragmentSchema.parse(request.body);
+
+    try {
+      const updated = await app.prisma.contentFragment.update({
+        where: { id },
+        data: {
+          ...(payload.fields ? { fields: payload.fields as Prisma.InputJsonValue } : {}),
+          ...(payload.status ? { status: payload.status } : {}),
+          ...(payload.version ? { version: payload.version } : {})
+        }
+      });
+
+      if (payload.status) {
+        await recordFragmentWorkflow(id, {
+          actor: 'system',
+          action: `status:${payload.status}`,
+          notes: 'Status updated via API'
+        });
+      }
+
+      return updated;
+    } catch (error) {
+      request.log.error({ err: error, fragmentId: id }, 'Failed to update fragment');
+      reply.notFound('Fragment not found');
+    }
+  });
+
+  app.get('/v1/fragments/:id/workflow-events', async (request) => {
+    const { id } = request.params as { id: string };
+    const query = workflowListQuerySchema.parse(request.query);
+    return app.prisma.fragmentWorkflowEvent.findMany({
+      where: { fragmentId: id },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit
+    });
+  });
+
+  app.post('/v1/fragments/:id/workflow-events', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const payload = fragmentWorkflowEventSchema.parse(request.body);
+    const fragment = await app.prisma.contentFragment.findUnique({ where: { id } });
+    if (!fragment) {
+      reply.notFound('Fragment not found');
+      return;
+    }
+
+    if (payload.status && payload.status !== fragment.status) {
+      await app.prisma.contentFragment.update({
+        where: { id },
+        data: { status: payload.status }
+      });
+    }
+
+    const event = await recordFragmentWorkflow(id, {
+      actor: payload.actor,
+      action: payload.action,
+      notes: payload.notes,
+      metadata: payload.metadata as Prisma.InputJsonValue | undefined
+    });
+
+    reply.code(201).send(event);
+  });
+
   const fetchReleaseWithPages = async (releaseId: string) =>
     app.prisma.release.findUnique({
       where: { id: releaseId },
       include: { pages: { orderBy: { sortOrder: 'asc' } } }
     });
 
+  const recordPageWorkflow = async (pageId: string, data: Omit<Prisma.PageWorkflowEventCreateInput, 'page'>) =>
+    app.prisma.pageWorkflowEvent.create({
+      data: {
+        pageId,
+        actor: data.actor,
+        action: data.action,
+        notes: data.notes,
+        metadata: data.metadata
+      }
+    });
+
+  const recordFragmentWorkflow = async (
+    fragmentId: string,
+    data: Omit<Prisma.FragmentWorkflowEventCreateInput, 'fragment'>
+  ) =>
+    app.prisma.fragmentWorkflowEvent.create({
+      data: {
+        fragmentId,
+        actor: data.actor,
+        action: data.action,
+        notes: data.notes,
+        metadata: data.metadata
+      }
+    });
+
+  const ensureEntityExists = async (entityType: 'PAGE' | 'FRAGMENT', entityId: string) => {
+    if (entityType === 'PAGE') {
+      return app.prisma.page.findUnique({ where: { id: entityId } });
+    }
+    return app.prisma.contentFragment.findUnique({ where: { id: entityId } });
+  };
+
   const submitReleaseToPublication = async (releaseId: string) => {
     const release = await fetchReleaseWithPages(releaseId);
     if (!release) {
       app.log.warn({ releaseId }, 'Release disappeared before submission');
-      return;
+      throw new Error('Release disappeared before submission');
     }
 
     const payload = {
@@ -229,7 +471,7 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
         throw new Error(`Publication service rejected release: ${errorText}`);
       }
 
-      const publicationRelease = (await response.json()) as { id: string };
+      const publicationRelease = (await response.json()) as { id: string; pages?: unknown };
       await app.prisma.release.update({
         where: { id: releaseId },
         data: {
@@ -239,6 +481,7 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
           lastSubmittedAt: new Date()
         }
       });
+      return publicationRelease;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to submit release to publication';
@@ -296,16 +539,22 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
       return createdRelease;
     });
 
-    void submitReleaseToPublication(release.id).catch((error) => {
+    try {
+      const publicationRelease = await submitReleaseToPublication(release.id);
+      const releaseWithPages = await fetchReleaseWithPages(release.id);
+      if (!releaseWithPages) {
+        reply.internalServerError('Release persisted but could not be loaded');
+        return;
+      }
+      reply.code(202).send({
+        authoringReleaseId: release.id,
+        ...publicationRelease,
+        pages: publicationRelease.pages ?? releaseWithPages.pages
+      });
+    } catch (error) {
       app.log.error({ err: error, releaseId: release.id }, 'Release submission failed');
-    });
-
-    const releaseWithPages = await fetchReleaseWithPages(release.id);
-    if (!releaseWithPages) {
-      reply.internalServerError('Release persisted but could not be loaded');
-      return;
+      reply.internalServerError('Failed to submit release to publication');
     }
-    reply.code(202).send(releaseWithPages);
   });
 
   app.get('/v1/releases', async (request) => {
@@ -358,12 +607,121 @@ export const buildServer = (config: ServiceConfig): FastifyInstance => {
       data: { status: 'QUEUED', errorMessage: null }
     });
 
-    void submitReleaseToPublication(id).catch((error) => {
+    try {
+      const publicationRelease = await submitReleaseToPublication(id);
+      const refreshed = await fetchReleaseWithPages(id);
+      reply
+        .code(202)
+        .send(
+          publicationRelease
+            ? { authoringReleaseId: id, ...publicationRelease }
+            : refreshed ?? updated
+        );
+    } catch (error) {
       app.log.error({ err: error, releaseId: id }, 'Release retry submission failed');
+      reply.internalServerError('Failed to resubmit release');
+    }
+  });
+
+  app.post('/v1/approvals', async (request, reply) => {
+    const payload = approvalEntitySchema.parse(request.body);
+    const entity = await ensureEntityExists(payload.entityType, payload.entityId);
+    if (!entity) {
+      reply.notFound(`${payload.entityType} not found`);
+      return;
+    }
+
+    const approval = await app.prisma.approvalRequest.create({
+      data: {
+        entityType: payload.entityType,
+        entityId: payload.entityId,
+        requestedBy: payload.requestedBy,
+        notes: payload.notes
+      }
     });
 
-    const refreshed = await fetchReleaseWithPages(id);
-    reply.code(202).send(refreshed ?? updated);
+    if (payload.entityType === 'PAGE') {
+      await recordPageWorkflow(payload.entityId, {
+        actor: payload.requestedBy,
+        action: 'approval:requested',
+        notes: payload.notes
+      });
+    } else {
+      await recordFragmentWorkflow(payload.entityId, {
+        actor: payload.requestedBy,
+        action: 'approval:requested',
+        notes: payload.notes
+      });
+    }
+
+    reply.code(201).send(approval);
+  });
+
+  app.get('/v1/approvals', async (request) => {
+    const query = approvalListQuerySchema.parse(request.query);
+    return app.prisma.approvalRequest.findMany({
+      where: {
+        ...(query.entityType ? { entityType: query.entityType } : {}),
+        ...(query.entityId ? { entityId: query.entityId } : {}),
+        ...(query.status ? { status: query.status } : {})
+      },
+      orderBy: { createdAt: 'desc' },
+      take: query.limit
+    });
+  });
+
+  app.post('/v1/approvals/:id/decision', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const payload = approvalDecisionSchema.parse(request.body);
+
+    const approval = await app.prisma.approvalRequest.findUnique({ where: { id } });
+    if (!approval) {
+      reply.notFound('Approval not found');
+      return;
+    }
+
+    if (approval.status !== 'PENDING') {
+      reply.conflict('Approval already decided');
+      return;
+    }
+
+    const updated = await app.prisma.approvalRequest.update({
+      where: { id },
+      data: {
+        status: payload.decision,
+        decidedBy: payload.decidedBy,
+        decidedAt: new Date(),
+        notes: payload.notes ?? approval.notes
+      }
+    });
+
+    const workflowNotes = payload.notes ?? undefined;
+
+    if (approval.entityType === 'PAGE') {
+      const nextStatus = payload.decision === 'APPROVED' ? 'APPROVED' : 'IN_REVIEW';
+      await app.prisma.page.update({
+        where: { id: approval.entityId },
+        data: { status: nextStatus }
+      });
+      await recordPageWorkflow(approval.entityId, {
+        actor: payload.decidedBy,
+        action: `approval:${payload.decision.toLowerCase()}`,
+        notes: workflowNotes
+      });
+    } else {
+      const nextStatus = payload.decision === 'APPROVED' ? 'APPROVED' : 'IN_REVIEW';
+      await app.prisma.contentFragment.update({
+        where: { id: approval.entityId },
+        data: { status: nextStatus }
+      });
+      await recordFragmentWorkflow(approval.entityId, {
+        actor: payload.decidedBy,
+        action: `approval:${payload.decision.toLowerCase()}`,
+        notes: workflowNotes
+      });
+    }
+
+    reply.code(200).send(updated);
   });
 
   return app;

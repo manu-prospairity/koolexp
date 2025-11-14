@@ -1,0 +1,114 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dxp-postgres
+    environment:
+      POSTGRES_DB: dxp_authoring
+      POSTGRES_USER: dxp
+      POSTGRES_PASSWORD: dxp
+    ports:
+      - '55432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dxp -d dxp_authoring']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  authoring:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_PATH: services/authoring-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      publication:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://dxp:dxp@postgres:5432/dxp_authoring
+      PUBLICATION_SERVICE_URL: http://publication:4103
+      API_KEY: ${API_KEY:-local-demo-key}
+      PUBLICATION_SERVICE_API_KEY: ${API_KEY:-local-demo-key}
+      HOST: 0.0.0.0
+    command: >
+      sh -c "npx prisma migrate deploy --schema services/authoring-api/prisma/schema.prisma && npm run start --workspace=services/authoring-api"
+    ports:
+      - '4101:4101'
+    volumes:
+      - ./data:/app/data
+
+  publication:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_PATH: services/publication-service
+    environment:
+      API_KEY: ${API_KEY:-local-demo-key}
+      HOST: 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - '4103:4103'
+    volumes:
+      - ./data:/app/data
+
+  delivery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_PATH: services/delivery-api
+    environment:
+      API_KEY: ${API_KEY:-local-demo-key}
+      HOST: 0.0.0.0
+    depends_on:
+      publication:
+        condition: service_started
+    ports:
+      - '4104:4104'
+    volumes:
+      - ./data:/app/data
+
+  asset:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_PATH: services/asset-service
+    environment:
+      API_KEY: ${API_KEY:-local-demo-key}
+      HOST: 0.0.0.0
+    depends_on:
+      publication:
+        condition: service_started
+    ports:
+      - '4102:4102'
+    volumes:
+      - ./data:/app/data
+
+  demo:
+    image: bank-dxp-authoring:latest
+    command: sh -c "npm run demo"
+    environment:
+      AUTHORING_URL: http://authoring:4101
+      PUBLICATION_URL: http://publication:4103
+      DELIVERY_URL: http://delivery:4104
+      API_KEY: ${API_KEY:-local-demo-key}
+    depends_on:
+      authoring:
+        condition: service_started
+      publication:
+        condition: service_started
+      delivery:
+        condition: service_started
+    profiles:
+      - demo
+
+volumes:
+  pgdata:

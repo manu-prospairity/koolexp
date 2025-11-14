@@ -51,17 +51,55 @@ The script creates a draft page, requests a release, promotes it, and fetches th
 ## Release Lifecycle
 
 - Authoring API now persists release metadata and snapshots the included pages, exposing `GET /v1/releases`, `GET /v1/releases/:id`, and `POST /v1/releases/:id/retry` for auditing or retrying submissions.
-- Publication service provides list/search capabilities on `/v1/releases` and stores every release plus its promoted snapshots on disk via a dedicated release store. Delivery API can read a specific `releaseId` or fall back to the latest promoted snapshot.
+- Publication service journals releases under `DATA_DIR/release-store/releases.json`, exposes `GET /v1/releases/summary`, and serves the latest snapshot through `GET /v1/releases/active`.
+- Delivery API can read a specific `releaseId` or fall back to the latest promoted snapshot and list available releases via `GET /v1/delivery/releases`.
 
 ## Security & Observability
 
 - All services accept an optional `API_KEY`. When set, every request (except `GET /healthz`) must include the `x-api-key` header and responses echo an `x-request-id` to correlate logs.
 - Basic latency logging is emitted per request to aid troubleshooting.
 
+## Workflow Enhancements
+
+- Pages now support schedules (`PUT /v1/pages/:id/schedule`), workflow timelines (`GET/POST /v1/pages/:id/workflow-events`), and approval requests via `/v1/approvals`.
+- Content fragments can be listed, patched, and have workflow events recorded just like pages.
+
 ## Testing & CI
 
-- Publication service ships node:test coverage for the release store (`npm run test --workspace=services/publication-service`).
+- Asset, Delivery, and Publication services ship `node:test` suites runnable via `npm run test --workspace=<service>`.
 - A GitHub Actions workflow (`.github/workflows/ci.yml`) runs linting and the workspace test suite on every push or pull request.
+
+## Docker Quickstart
+
+Spin up the full platform (Postgres + all four services) with Docker Compose:
+
+```bash
+# Optionally override the shared API key for cross-service auth
+export API_KEY=${API_KEY:-local-demo-key}
+
+# Build images and start everything
+docker compose up -d postgres authoring publication delivery asset
+```
+
+Authoring automatically runs Prisma migrations against the bundled Postgres container. All services expose their usual ports to the host (`4101-4104`) and share the local `data/` directory for release + asset storage.
+
+Run the end-to-end demo against the containers:
+
+```bash
+docker compose run --rm demo
+```
+
+If you need a clean slate (drops Postgres + release data):
+
+```bash
+docker compose down -v
+```
+
+When you are done with the stack:
+
+```bash
+docker compose down
+```
 
 ## Next Steps
 

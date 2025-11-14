@@ -4,16 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 
-import { FileReleaseStore } from '../fileReleaseStore';
+import { JournalReleaseStore } from '../journalReleaseStore';
 
 const createStore = async () => {
   const baseDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'release-store-'));
-  const releasesDir = path.join(baseDir, 'releases');
   const deliveryDir = path.join(baseDir, 'delivery');
-  await fsp.mkdir(releasesDir, { recursive: true });
+  const storeDir = path.join(baseDir, 'store');
   await fsp.mkdir(deliveryDir, { recursive: true });
-  const store = new FileReleaseStore(releasesDir, deliveryDir);
-  return { store, baseDir, releasesDir, deliveryDir };
+  await fsp.mkdir(storeDir, { recursive: true });
+  const store = new JournalReleaseStore(path.join(storeDir, 'releases.json'), deliveryDir);
+  return { store, baseDir, deliveryDir };
 };
 
 const samplePage = {
@@ -51,6 +51,19 @@ test('promoting a release writes delivery snapshot', async (t) => {
   const snapshotPath = path.join(deliveryReleasesDir, `${release.id}.json`);
   const snapshot = JSON.parse(await fsp.readFile(snapshotPath, 'utf-8'));
   assert.equal(snapshot.id, release.id);
+});
+
+test('summary tallies statuses', async (t) => {
+  const { store, baseDir } = await createStore();
+  t.after(async () => fsp.rm(baseDir, { recursive: true, force: true }));
+
+  const first = await store.create({ pages: [samplePage], name: 'first' });
+  await store.create({ pages: [samplePage], name: 'second' });
+  await store.promote(first.id);
+
+  const summary = await store.summary();
+  assert.equal(summary.promoted, 1);
+  assert.equal(summary.created, 1);
 });
 
 test('rollback updates release status', async (t) => {

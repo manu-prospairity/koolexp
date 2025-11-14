@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PageStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum FragmentStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ReleaseStatus {
+  QUEUED
+  SUBMITTED
+  FAILED
+}
+
+model Page {
+  id         String      @id @default(uuid())
+  path       String      @unique
+  title      String
+  template   String
+  locale     String
+  status     PageStatus  @default(DRAFT)
+  components Json
+  seo        Json?
+  publishAt  DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  releases   ReleasePage[]
+}
+
+model ContentFragment {
+  id         String          @id @default(uuid())
+  model      String
+  locale     String
+  fields     Json
+  status     FragmentStatus  @default(DRAFT)
+  version    Int             @default(1)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+}
+
+model Release {
+  id              String         @id @default(uuid())
+  name            String?
+  notes           String?
+  status          ReleaseStatus  @default(QUEUED)
+  publicationId   String?
+  lastSubmittedAt DateTime?
+  errorMessage    String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  pages           ReleasePage[]
+}
+
+model ReleasePage {
+  id         String   @id @default(uuid())
+  releaseId  String
+  pageId     String
+  sortOrder  Int
+  path       String
+  locale     String
+  title      String
+  components Json
+  seo        Json?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  page    Page    @relation(fields: [pageId], references: [id], onDelete: Restrict)
+
+  @@unique([releaseId, sortOrder])
+}

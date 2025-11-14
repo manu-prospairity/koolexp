@@ -69,6 +69,18 @@ The script creates a draft page, requests a release, promotes it, and fetches th
 - Asset, Delivery, and Publication services ship `node:test` suites runnable via `npm run test --workspace=<service>`.
 - A GitHub Actions workflow (`.github/workflows/ci.yml`) runs linting and the workspace test suite on every push or pull request.
 
+## Admin UI
+
+A lightweight React/Vite dashboard (`apps/admin-ui`) lets you list drafts, queue releases, and inspect published pages.
+
+```bash
+npm install           # once, to install the new workspace deps
+npm run dev --workspace=apps/admin-ui
+# Visit http://localhost:5173 (configure API hosts via Vite env vars if needed)
+```
+
+Environment variables (prefixed with `VITE_`) default to the local ports but you can override them, e.g. `VITE_AUTHORING_URL=http://authoring:4101` when running inside Docker.
+
 ## Docker Quickstart
 
 Spin up the full platform (Postgres + all four services) with Docker Compose:

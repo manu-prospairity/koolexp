@@ -15,7 +15,8 @@
     "demo": "tsx scripts/demo-flow.ts"
   },
   "workspaces": [
-    "services/*"
+    "services/*",
+    "apps/*"
   ],
   "devDependencies": {
     "@types/node": "^20.11.19",
